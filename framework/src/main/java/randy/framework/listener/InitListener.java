@@ -1,10 +1,12 @@
 package randy.framework.listener;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import jakarta.servlet.ServletContext;
 import jakarta.servlet.ServletContextEvent;
 import jakarta.servlet.ServletContextListener;
 import jakarta.servlet.annotation.WebListener;
-import java.util.Map;
 import randy.framework.model.Mapping;
 import randy.framework.model.UrlKey;
 import randy.framework.util.Utilitaire;
@@ -22,7 +24,8 @@ public class InitListener implements ServletContextListener {
         System.out.println("[FRAMEWORK] Initialisation au déploiement de l'application...");
         
         // 2. Exécution du scan des contrôleurs
-        Map<UrlKey, Mapping> urlList = Utilitaire.scanPaths(packageToScan);
+        Map<UrlKey, Mapping> urlList = new HashMap<>();
+        Utilitaire.scanPaths(packageToScan, urlList);
         
         // 3. Stockage de la liste des routes dans le contexte applicatif global
         context.setAttribute("urlList", urlList);

@@ -71,8 +71,6 @@ public class FrontControllerServlet extends HttpServlet {
             out.println("<strong>[" + httpMethod + "] " + pathInfo + "</strong> &rarr; " + map.getClassName()
                     + " &rarr; " + map.getMethod() + "()");
             out.println("</p>");
-
-            // Invocation de la méthode par réflexion
             try {
                 Class<?> clazz = Class.forName(map.getClassName());
                 Object controllerInstance = clazz.getDeclaredConstructor().newInstance();

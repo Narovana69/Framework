@@ -2,6 +2,7 @@ randy/framework/annotation/Controller.class
 randy/framework/Main.class
 randy/framework/servlet/BallsController.class
 randy/framework/model/UrlKey.class
+randy/framework/listener/InitListener.class
 randy/framework/servlet/FrontControllerServlet.class
 randy/framework/model/Mapping.class
 randy/framework/annotation/UrlMapping.class
