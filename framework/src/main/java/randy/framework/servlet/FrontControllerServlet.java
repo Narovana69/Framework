@@ -2,6 +2,7 @@ package randy.framework.servlet;
 
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.HashMap;
@@ -13,23 +14,41 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import randy.framework.helper.ViewRenderer;
 import randy.framework.model.Mapping;
+import randy.framework.model.ModelAndView;
 import randy.framework.model.UrlKey;
+import randy.framework.util.HtmlViewRenderer;
+import randy.framework.util.JspViewRenderer;
 
 public class FrontControllerServlet extends HttpServlet {
     private Map<UrlKey, Mapping> urlList = new HashMap<>();
+    private static final Map<String, ViewRenderer> RENDERERS = Map.of(
+            ".jsp", new JspViewRenderer(),
+            ".html", new HtmlViewRenderer(),
+            ".htm", new HtmlViewRenderer());
+    private String prefix;
+    private String suffix;
 
     @Override
     public void init(ServletConfig config) throws ServletException {
         super.init(config);
         ServletContext context = config.getServletContext();
-        this.urlList = (Map<UrlKey, Mapping>) context.getAttribute("urlList");
-        if (urlList != null) {
-            System.out.println("[FrontController] Récupération des " + this.urlList.size() + " routes effectuée.");
-        } else {
-            System.err.println("[FrontController] Erreur : Aucune table de routage trouvée dans le contexte !");
+        Exception deploymentError = (Exception) context.getAttribute("deploymentError");
+        if (deploymentError != null) {
+            throw new ServletException(
+                    "[FRAMEWORK] Échec du démarrage : " + deploymentError.getMessage(),
+                    deploymentError);
         }
-        System.out.println("URLs mapped: " + urlList.size());
+        Map<UrlKey, Mapping> load = (Map<UrlKey, Mapping>) context.getAttribute("urlList");
+        if (load != null) {
+            this.urlList = load;
+            System.out.println("[FrontController] " + this.urlList.size() + " routes chargées.");
+        } else {
+            throw new ServletException("[FRAMEWORK] urlList introuvable dans le contexte !");
+        }
+        this.prefix = (String) context.getAttribute("prefix");
+        this.suffix = (String) context.getAttribute("suffix");
     }
 
     @Override
@@ -44,9 +63,15 @@ public class FrontControllerServlet extends HttpServlet {
         processRequest(request, response);
     }
 
-    private void processRequest(HttpServletRequest request, HttpServletResponse response) throws IOException {
-        response.setContentType("text/html;charset=UTF-8");
-        PrintWriter out = response.getWriter();
+    private void processRequest(HttpServletRequest request, HttpServletResponse response)
+            throws IOException, ServletException {
+        // IMPORTANT : on ne récupère PAS response.getWriter() ici. Un ViewRenderer
+        // (ex: HtmlViewRenderer) peut avoir besoin de response.getOutputStream(),
+        // et l'API Servlet interdit d'appeler getWriter() ET getOutputStream() sur
+        // la même réponse (le premier appelé verrouille le mode). On accumule donc
+        // le HTML de debug dans un buffer, et on ne le flushe QUE si on ne délègue
+        // pas le rendu à un ViewRenderer.
+        StringBuilder buf = new StringBuilder();
 
         String contextPath = request.getContextPath();
         String requestURL = request.getRequestURI();
@@ -54,53 +79,67 @@ public class FrontControllerServlet extends HttpServlet {
         String httpMethod = request.getMethod();
         UrlKey key = new UrlKey(pathInfo, httpMethod);
 
-        out.println("<html>");
-        out.println("<head><title>Front Controller - Routage</title></head>");
-        out.println("<body style='font-family: Arial, sans-serif; margin: 40px;'>");
-        out.println("<h1>Front Controller</h1>");
-        out.println("<p>URL demandée : <strong>" + pathInfo + "</strong> | Méthode : <strong>" + httpMethod
-                + "</strong></p>");
-        out.println("<hr/>");
+        buf.append("<html>");
+        buf.append("<head><title>Front Controller - Routage</title></head>");
+        buf.append("<body style='font-family: Arial, sans-serif; margin: 40px;'>");
+        buf.append("<h1>Front Controller</h1>");
+        buf.append("<p>URL demandée : <strong>").append(pathInfo).append("</strong> | Méthode : <strong>").append(httpMethod).append("</strong></p>");
+        buf.append("<hr/>");
 
         // Si l'url et la méthode sont supportées
         if (urlList != null && urlList.containsKey(key)) {
             Mapping map = urlList.get(key);
-            out.println("<h3 style='color: green;'>✔ URL supportée</h3>");
-            out.println(
+            buf.append("<h3 style='color: green;'>✔ URL supportée</h3>");
+            buf.append(
                     "<p style='font-size: 16px; background-color: #f0fdf4; padding: 15px; border-left: 5px solid green;'>");
-            out.println("<strong>[" + httpMethod + "] " + pathInfo + "</strong> &rarr; " + map.getClassName()
-                    + " &rarr; " + map.getMethod() + "()");
-            out.println("</p>");
+            buf.append("<strong>[").append(httpMethod).append("] ").append(pathInfo).append("</strong> &rarr; ").append(map.getClassName()).append(" &rarr; ").append(map.getMethod()).append("()");
+            buf.append("</p>");
             try {
                 Class<?> clazz = Class.forName(map.getClassName());
                 Object controllerInstance = clazz.getDeclaredConstructor().newInstance();
                 Method targetMethod = clazz.getDeclaredMethod(map.getMethod());
                 Object result = targetMethod.invoke(controllerInstance);
                 // targetMethod.invoke(controllerInstance);
-                out.println("<p style='color: blue; font-weight: bold;'>[Succès] La méthode du contrôleur a été exécutée. Veuillez consulter les logs de votre serveur.</p>");
+                if (result instanceof ModelAndView mv) {
+                    for (Map.Entry<String, Object> entry : mv.getModel().entrySet()) {
+                        request.setAttribute(entry.getKey(), entry.getValue());
+                    }
+                    String path = prefix + mv.getView() + suffix;
+                    ViewRenderer renderer = RENDERERS.get(suffix.toLowerCase());
+                    if (renderer == null) {
+                        throw new ServletException("Aucun renderer configuré pour le suffixe : " + suffix);
+                    }
+                    // On délègue entièrement l'écriture de la réponse au renderer :
+                    // on ne doit PAS avoir appelé getWriter() avant ce point.
+                    renderer.render(request, response, path);
+                    return;
+                }
+                buf.append(
+                        "<p style='color: blue; font-weight: bold;'>[Succès] La méthode du contrôleur a été exécutée. Veuillez consulter les logs de votre serveur.</p>");
                 if (result != null) {
-                    out.println("<p style='color: green;'><strong>Résultat :</strong> " + result + "</p>");
+                    buf.append("<p style='color: green;'><strong>Résultat :</strong> ").append(result).append("</p>");
                 }
             } catch (ClassNotFoundException | IllegalAccessException | IllegalArgumentException | InstantiationException
-                    | NoSuchMethodException | SecurityException | InvocationTargetException e) {
-                out.println("<h3 style='color: red;'>✘ Erreur lors de l'exécution de la méthode</h3>");
-                out.println("<pre style='background: #fee2e2; padding: 10px;'>");
-                e.printStackTrace(out);
-                out.println("</pre>");
+                    | NoSuchMethodException | SecurityException | InvocationTargetException | ServletException e) {
+                buf.append("<h3 style='color: red;'>✘ Erreur lors de l'exécution de la méthode</h3>");
+                buf.append("<pre style='background: #fee2e2; padding: 10px;'>");
+                StringWriter sw = new StringWriter();
+                e.printStackTrace(new PrintWriter(sw));
+                buf.append(sw.toString());
+                buf.append("</pre>");
             }
         }
         // Si la combinaison URL / Méthode n'est pas supportée
         else {
-            out.println("<h3 style='color: red;'>✘ Erreur : L'URL exacte n'est pas supportée pour cette méthode</h3>");
-            out.println("<p>Aucune correspondance exacte trouvée pour <code>" + pathInfo + "</code> en mode <strong>"
-                    + httpMethod + "</strong>.</p>");
-            out.println("<h4>Routes suggérées utilisant <code>" + pathInfo + "</code> comme préfixe :</h4>");
+            buf.append("<h3 style='color: red;'>✘ Erreur : L'URL exacte n'est pas supportée pour cette méthode</h3>");
+            buf.append("<p>Aucune correspondance exacte trouvée pour <code>").append(pathInfo).append("</code> en mode <strong>").append(httpMethod).append("</strong>.</p>");
+            buf.append("<h4>Routes suggérées utilisant <code>").append(pathInfo).append("</code> comme préfixe :</h4>");
 
-            out.println(
+            buf.append(
                     "<table border='1' cellpadding='10' cellspacing='0' style='border-collapse: collapse; width: 100%;'>");
-            out.println("<tr style='background-color: #f3f4f6;'>");
-            out.println("<th>Méthode HTTP</th><th>URL</th><th>Controller</th><th>Méthode Class</th>");
-            out.println("</tr>");
+            buf.append("<tr style='background-color: #f3f4f6;'>");
+            buf.append("<th>Méthode HTTP</th><th>URL</th><th>Controller</th><th>Méthode Class</th>");
+            buf.append("</tr>");
 
             boolean aDesSuggestions = false;
 
@@ -109,36 +148,39 @@ public class FrontControllerServlet extends HttpServlet {
                     String routeDisponible = entry.getKey().getUrl();
                     if (routeDisponible.startsWith(pathInfo)) {
                         aDesSuggestions = true;
-                        out.println("<tr>");
-                        out.println(
-                                "<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>"
-                                        + entry.getKey().getHttpMethod() + "</span></td>");
-                        out.println("<td><code>" + routeDisponible + "</code></td>");
-                        out.println("<td>" + entry.getValue().getClassName() + "</td>");
-                        out.println("<td>" + entry.getValue().getMethod() + "()</td>");
-                        out.println("</tr>");
+                        buf.append("<tr>");
+                        buf.append("<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>").append(entry.getKey().getHttpMethod()).append("</span></td>");
+                        buf.append("<td><code>").append(routeDisponible).append("</code></td>");
+                        buf.append("<td>").append(entry.getValue().getClassName()).append("</td>");
+                        buf.append("<td>").append(entry.getValue().getMethod()).append("()</td>");
+                        buf.append("</tr>");
                     }
                 }
             }
             if (!aDesSuggestions) {
-                out.println("<tr><td colspan='4' style='text-align:center; color: gray;'>");
-                out.println("Aucune sous-route trouvée. Voici toutes les configurations de l'application :");
-                out.println("</td></tr>");
+                buf.append("<tr><td colspan='4' style='text-align:center; color: gray;'>");
+                buf.append("Aucune sous-route trouvée. Voici toutes les configurations de l'application :");
+                buf.append("</td></tr>");
 
                 for (Map.Entry<UrlKey, Mapping> entry : urlList.entrySet()) {
-                    out.println("<tr>");
-                    out.println(
-                            "<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>"
-                                    + entry.getKey().getHttpMethod() + "</span></td>");
-                    out.println("<td><code>" + entry.getKey().getUrl() + "</code></td>");
-                    out.println("<td>" + entry.getValue().getClassName() + "</td>");
-                    out.println("<td>" + entry.getValue().getMethod() + "()</td>");
-                    out.println("</tr>");
+                    buf.append("<tr>");
+                    buf.append("<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>").append(entry.getKey().getHttpMethod()).append("</span></td>");
+                    buf.append("<td><code>").append(entry.getKey().getUrl()).append("</code></td>");
+                    buf.append("<td>").append(entry.getValue().getClassName()).append("</td>");
+                    buf.append("<td>").append(entry.getValue().getMethod()).append("()</td>");
+                    buf.append("</tr>");
                 }
             }
-            out.println("</table>");
+            buf.append("</table>");
         }
-        out.println("</body>");
-        out.println("</html>");
+        buf.append("</body>");
+        buf.append("</html>");
+
+        // On n'atteint ce point que si aucun ViewRenderer n'a pris la main
+        // (erreur, route non trouvée, ou contrôleur qui ne renvoie pas de ModelAndView).
+        // C'est SEULEMENT ICI qu'on récupère le Writer pour écrire la page de debug.
+        response.setContentType("text/html;charset=UTF-8");
+        PrintWriter out = response.getWriter();
+        out.print(buf);
     }
 }
