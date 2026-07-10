@@ -19,7 +19,6 @@ public class HtmlViewRenderer implements ViewRenderer {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND, "Vue introuvable : " + viewPath);
                 return;
             }
-            // in.transferTo(response.getOutputStream());
             // 1- Lecture du fichier
             String htmlContent = new String(in.readAllBytes(), StandardCharsets.UTF_8);
             // 2- Dynamisation: parcours les attributs renvoyes du controlleurr
@@ -29,20 +28,17 @@ public class HtmlViewRenderer implements ViewRenderer {
                 Object value = request.getAttribute(key);
                 if (value != null) {
                     String replacement;
-                    // Si l'attribut est un tableau (comme ton String[] de messages)
-                    if (value instanceof String[] array) {
+                    if (value instanceof Object[] array) {
                         StringBuilder sb = new StringBuilder("<ul>");
-                        for (String item : array) {
+                        for (Object item : array) {
                             sb.append("<li>").append(item).append("</li>");
                         }
                         sb.append("</ul>");
                         replacement = sb.toString();
                     }
-                    // Si c'est un objet classique (String, Integer, etc.), on prend son texte
                     else {
                         replacement = value.toString();
                     }
-                    // On remplace la balise {clé} par sa valeur dans tout le fichier HTML
                     htmlContent = htmlContent.replace("{" + key + "}", replacement);
                 }
             }

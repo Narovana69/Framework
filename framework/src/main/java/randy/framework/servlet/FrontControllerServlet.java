@@ -65,12 +65,6 @@ public class FrontControllerServlet extends HttpServlet {
 
     private void processRequest(HttpServletRequest request, HttpServletResponse response)
             throws IOException, ServletException {
-        // IMPORTANT : on ne récupère PAS response.getWriter() ici. Un ViewRenderer
-        // (ex: HtmlViewRenderer) peut avoir besoin de response.getOutputStream(),
-        // et l'API Servlet interdit d'appeler getWriter() ET getOutputStream() sur
-        // la même réponse (le premier appelé verrouille le mode). On accumule donc
-        // le HTML de debug dans un buffer, et on ne le flushe QUE si on ne délègue
-        // pas le rendu à un ViewRenderer.
         StringBuilder buf = new StringBuilder();
 
         String contextPath = request.getContextPath();
@@ -101,7 +95,7 @@ public class FrontControllerServlet extends HttpServlet {
                 Object result = targetMethod.invoke(controllerInstance);
                 // targetMethod.invoke(controllerInstance);
                 if (result instanceof ModelAndView mv) {
-                    for (Map.Entry<String, Object> entry : mv.getModel().entrySet()) {
+                    for (Map.Entry<String, Object[]> entry : mv.getModel().entrySet()) {
                         request.setAttribute(entry.getKey(), entry.getValue());
                     }
                     String path = prefix + mv.getView() + suffix;
@@ -109,8 +103,6 @@ public class FrontControllerServlet extends HttpServlet {
                     if (renderer == null) {
                         throw new ServletException("Aucun renderer configuré pour le suffixe : " + suffix);
                     }
-                    // On délègue entièrement l'écriture de la réponse au renderer :
-                    // on ne doit PAS avoir appelé getWriter() avant ce point.
                     renderer.render(request, response, path);
                     return;
                 }
@@ -175,10 +167,6 @@ public class FrontControllerServlet extends HttpServlet {
         }
         buf.append("</body>");
         buf.append("</html>");
-
-        // On n'atteint ce point que si aucun ViewRenderer n'a pris la main
-        // (erreur, route non trouvée, ou contrôleur qui ne renvoie pas de ModelAndView).
-        // C'est SEULEMENT ICI qu'on récupère le Writer pour écrire la page de debug.
         response.setContentType("text/html;charset=UTF-8");
         PrintWriter out = response.getWriter();
         out.print(buf);

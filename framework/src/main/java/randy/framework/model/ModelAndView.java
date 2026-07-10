@@ -5,7 +5,7 @@ import java.util.Map;
 
 public class ModelAndView {
     private String view;
-    private Map<String, Object> model;
+    private Map<String, Object[]> model;
 
     public ModelAndView(String view) {
         this.view = view;
@@ -20,7 +20,7 @@ public class ModelAndView {
         return view;
     }
 
-    public Map<String, Object> getModel() {
+    public Map<String, Object[]> getModel() {
         return model;
     }
 
@@ -28,7 +28,7 @@ public class ModelAndView {
         this.view = view;
     }
 
-    public void setAttribute(String key, Object value) {
+    public void setAttribute(String key, Object[] value) {
         this.model.put(key, value);
     }
 
