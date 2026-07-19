@@ -6,12 +6,10 @@ import java.util.Map;
 import jakarta.servlet.ServletContext;
 import jakarta.servlet.ServletContextEvent;
 import jakarta.servlet.ServletContextListener;
-import jakarta.servlet.annotation.WebListener;
 import randy.framework.model.Mapping;
 import randy.framework.model.UrlKey;
 import randy.framework.util.Utilitaire;
 
-@WebListener
 public class InitListener implements ServletContextListener {
     @Override
     public void contextInitialized(ServletContextEvent sce) {

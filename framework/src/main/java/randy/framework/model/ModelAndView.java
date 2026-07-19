@@ -31,5 +31,4 @@ public class ModelAndView {
     public void setAttribute(String key, Object[] value) {
         this.model.put(key, value);
     }
-
 }

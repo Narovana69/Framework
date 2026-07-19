@@ -8,6 +8,9 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.springframework.context.ApplicationContext;
+import org.springframework.web.context.WebApplicationContext;
+
 import jakarta.servlet.ServletConfig;
 import jakarta.servlet.ServletContext;
 import jakarta.servlet.ServletException;
@@ -72,12 +75,15 @@ public class FrontControllerServlet extends HttpServlet {
         String pathInfo = requestURL.substring(contextPath.length());
         String httpMethod = request.getMethod();
         UrlKey key = new UrlKey(pathInfo, httpMethod);
+        ApplicationContext springContext = (ApplicationContext) request.getServletContext()
+                .getAttribute(WebApplicationContext.ROOT_WEB_APPLICATION_CONTEXT_ATTRIBUTE);
 
         buf.append("<html>");
         buf.append("<head><title>Front Controller - Routage</title></head>");
         buf.append("<body style='font-family: Arial, sans-serif; margin: 40px;'>");
         buf.append("<h1>Front Controller</h1>");
-        buf.append("<p>URL demandée : <strong>").append(pathInfo).append("</strong> | Méthode : <strong>").append(httpMethod).append("</strong></p>");
+        buf.append("<p>URL demandée : <strong>").append(pathInfo).append("</strong> | Méthode : <strong>")
+                .append(httpMethod).append("</strong></p>");
         buf.append("<hr/>");
 
         // Si l'url et la méthode sont supportées
@@ -86,30 +92,43 @@ public class FrontControllerServlet extends HttpServlet {
             buf.append("<h3 style='color: green;'>✔ URL supportée</h3>");
             buf.append(
                     "<p style='font-size: 16px; background-color: #f0fdf4; padding: 15px; border-left: 5px solid green;'>");
-            buf.append("<strong>[").append(httpMethod).append("] ").append(pathInfo).append("</strong> &rarr; ").append(map.getClassName()).append(" &rarr; ").append(map.getMethod()).append("()");
+            buf.append("<strong>[").append(httpMethod).append("] ").append(pathInfo).append("</strong> &rarr; ")
+                    .append(map.getClassName()).append(" &rarr; ").append(map.getMethod()).append("()");
             buf.append("</p>");
             try {
                 Class<?> clazz = Class.forName(map.getClassName());
                 Object controllerInstance = clazz.getDeclaredConstructor().newInstance();
-                Method targetMethod = clazz.getDeclaredMethod(map.getMethod());
-                Object result = targetMethod.invoke(controllerInstance);
-                // targetMethod.invoke(controllerInstance);
+                Method targetMethod = null;
+                for (Method m : clazz.getDeclaredMethods()) {
+                    if (m.getName().equals(map.getMethod())) {
+                        targetMethod = m;
+                        break;
+                    }
+                }
+                if (targetMethod == null) {
+                    throw new ServletException("Méthode introuvable : " + map.getMethod());
+                }
+                Class<?>[] paramTypes = targetMethod.getParameterTypes();
+                Object result;
+                if (paramTypes.length == 1
+                        && ApplicationContext.class.isAssignableFrom(paramTypes[0])) {
+                    result = targetMethod.invoke(controllerInstance, springContext);
+                } else {
+                    result = targetMethod.invoke(controllerInstance);
+                }
                 if (result instanceof ModelAndView mv) {
                     for (Map.Entry<String, Object[]> entry : mv.getModel().entrySet()) {
                         request.setAttribute(entry.getKey(), entry.getValue());
                     }
-                    String path = prefix + mv.getView() + suffix;
-                    ViewRenderer renderer = RENDERERS.get(suffix.toLowerCase());
-                    if (renderer == null) {
-                        throw new ServletException("Aucun renderer configuré pour le suffixe : " + suffix);
-                    }
-                    renderer.render(request, response, path);
+                    renderView(mv.getView(), request, response);
+                    return;
+                } else if (result instanceof String viewName) {
+                    renderView(viewName, request, response);
                     return;
                 }
-                buf.append(
-                        "<p style='color: blue; font-weight: bold;'>[Succès] La méthode du contrôleur a été exécutée. Veuillez consulter les logs de votre serveur.</p>");
+                buf.append("<p style='color: blue;'>[Succès] Méthode exécutée.</p>");
                 if (result != null) {
-                    buf.append("<p style='color: green;'><strong>Résultat :</strong> ").append(result).append("</p>");
+                    buf.append("<p><strong>Résultat :</strong> ").append(result).append("</p>");
                 }
             } catch (ClassNotFoundException | IllegalAccessException | IllegalArgumentException | InstantiationException
                     | NoSuchMethodException | SecurityException | InvocationTargetException | ServletException e) {
@@ -124,7 +143,8 @@ public class FrontControllerServlet extends HttpServlet {
         // Si la combinaison URL / Méthode n'est pas supportée
         else {
             buf.append("<h3 style='color: red;'>✘ Erreur : L'URL exacte n'est pas supportée pour cette méthode</h3>");
-            buf.append("<p>Aucune correspondance exacte trouvée pour <code>").append(pathInfo).append("</code> en mode <strong>").append(httpMethod).append("</strong>.</p>");
+            buf.append("<p>Aucune correspondance exacte trouvée pour <code>").append(pathInfo)
+                    .append("</code> en mode <strong>").append(httpMethod).append("</strong>.</p>");
             buf.append("<h4>Routes suggérées utilisant <code>").append(pathInfo).append("</code> comme préfixe :</h4>");
 
             buf.append(
@@ -141,7 +161,9 @@ public class FrontControllerServlet extends HttpServlet {
                     if (routeDisponible.startsWith(pathInfo)) {
                         aDesSuggestions = true;
                         buf.append("<tr>");
-                        buf.append("<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>").append(entry.getKey().getHttpMethod()).append("</span></td>");
+                        buf.append(
+                                "<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>")
+                                .append(entry.getKey().getHttpMethod()).append("</span></td>");
                         buf.append("<td><code>").append(routeDisponible).append("</code></td>");
                         buf.append("<td>").append(entry.getValue().getClassName()).append("</td>");
                         buf.append("<td>").append(entry.getValue().getMethod()).append("()</td>");
@@ -156,7 +178,9 @@ public class FrontControllerServlet extends HttpServlet {
 
                 for (Map.Entry<UrlKey, Mapping> entry : urlList.entrySet()) {
                     buf.append("<tr>");
-                    buf.append("<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>").append(entry.getKey().getHttpMethod()).append("</span></td>");
+                    buf.append(
+                            "<td><span style='background: #e5e7eb; padding: 3px 8px; border-radius: 4px; font-weight: bold;'>")
+                            .append(entry.getKey().getHttpMethod()).append("</span></td>");
                     buf.append("<td><code>").append(entry.getKey().getUrl()).append("</code></td>");
                     buf.append("<td>").append(entry.getValue().getClassName()).append("</td>");
                     buf.append("<td>").append(entry.getValue().getMethod()).append("()</td>");
@@ -170,5 +194,15 @@ public class FrontControllerServlet extends HttpServlet {
         response.setContentType("text/html;charset=UTF-8");
         PrintWriter out = response.getWriter();
         out.print(buf);
+    }
+
+    private void renderView(String viewName, HttpServletRequest request, HttpServletResponse response)
+            throws ServletException, IOException {
+        String path = prefix + viewName + suffix;
+        ViewRenderer renderer = RENDERERS.get(suffix.toLowerCase());
+        if (renderer == null) {
+            throw new ServletException("Aucun renderer configuré pour le suffixe : " + suffix);
+        }
+        renderer.render(request, response, path);
     }
 }
