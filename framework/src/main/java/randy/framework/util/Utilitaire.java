@@ -11,15 +11,9 @@ import randy.framework.annotation.UrlMapping;
 import randy.framework.model.Mapping;
 import randy.framework.model.UrlKey;
 
-    /**
-    * This class is intended to provide utility methods for the framework, such as:
-    * - Scanning for classes with specific annotations (e.g., @Controller)
-    * - Instantiating classes and managing dependencies
-    * - Handling configuration and properties
-    */
 public class Utilitaire {
     /**
-     * Scanne un package et retourne la liste des noms de classes annotées par @Controller
+     * Scanne un package et retourne la liste des noms de classes annotées par @Controller et @UrlMapping
      * On met en <Urlkey, Mapping> pour que le code applique UrlKey comme une classe cle pour le hashmap
      * et ces fonctions
      */
